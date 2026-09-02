@@ -1,6 +1,21 @@
+# API keys / secrets
 .env
-env/
-venv/
+.streamlit/secrets.toml
+
+# Python
 __pycache__/
-*.pyc
-uploaded_document.pdf
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Personal files
+*.pdf
+
+# Logs / local files
+*.log
+.DS_Store
