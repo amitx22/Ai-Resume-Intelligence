@@ -2,6 +2,7 @@ import os
 import io
 import re
 import json
+import time
 import numpy as np
 import faiss
 import streamlit as st
@@ -34,9 +35,78 @@ client = genai.Client(api_key=API_KEY)
 # Models available in your account
 EMBEDDING_MODEL = "gemini-embedding-001"
 CHAT_MODEL = "gemini-3.6-flash"
+FALLBACK_CHAT_MODEL = "gemini-3.5-flash-lite"
+MAX_API_RETRIES = 2
 
 # Gemini embedding dimension
 EMBEDDING_DIMENSION = 768
+
+
+
+def _is_retryable_gemini_error(error):
+    text = str(error).upper()
+    return any(code in text for code in (
+        "503", "UNAVAILABLE", "500", "502", "504",
+        "429", "RESOURCE_EXHAUSTED", "DEADLINE_EXCEEDED"
+    ))
+
+
+def _friendly_gemini_error(error):
+    text = str(error)
+    upper = text.upper()
+    if "503" in upper or "UNAVAILABLE" in upper:
+        return "Gemini is temporarily busy. Please wait a few seconds and try again."
+    if "429" in upper or "RESOURCE_EXHAUSTED" in upper:
+        return "Gemini rate limit/quota reached. Please wait and try again, or check your Gemini API quota."
+    if "401" in upper or "403" in upper or "API KEY" in upper:
+        return "Gemini API authentication failed. Check your GEMINI_API_KEY and API access."
+    return f"Gemini API error: {text}"
+
+
+def generate_gemini_content(contents, temperature=0, response_mime_type=None):
+    last_error = None
+    models_to_try = [CHAT_MODEL, FALLBACK_CHAT_MODEL]
+
+    for model_name in models_to_try:
+        for attempt in range(MAX_API_RETRIES + 1):
+            try:
+                config_kwargs = {"temperature": temperature}
+                if response_mime_type:
+                    config_kwargs["response_mime_type"] = response_mime_type
+
+                return client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(**config_kwargs)
+                )
+            except Exception as error:
+                last_error = error
+                if not _is_retryable_gemini_error(error):
+                    raise
+                if attempt < MAX_API_RETRIES:
+                    time.sleep(2 ** attempt)
+
+    raise RuntimeError(_friendly_gemini_error(last_error))
+
+
+def embed_gemini_content(contents):
+    last_error = None
+    for attempt in range(MAX_API_RETRIES + 1):
+        try:
+            return client.models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=contents,
+                config=types.EmbedContentConfig(
+                    output_dimensionality=EMBEDDING_DIMENSION
+                )
+            )
+        except Exception as error:
+            last_error = error
+            if not _is_retryable_gemini_error(error):
+                raise
+            if attempt < MAX_API_RETRIES:
+                time.sleep(2 ** attempt)
+    raise RuntimeError(_friendly_gemini_error(last_error))
 
 # Retrieval configuration
 VECTOR_TOP_K = 10
@@ -750,13 +820,7 @@ FINAL ANSWER:
 
     try:
 
-        response = client.models.generate_content(
-            model=CHAT_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0
-            )
-        )
+        response = generate_gemini_content(prompt, temperature=0)
 
         if response.text:
             return response.text.strip()
@@ -809,13 +873,7 @@ RESUME:
 
     try:
 
-        response = client.models.generate_content(
-            model=CHAT_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0
-            )
-        )
+        response = generate_gemini_content(prompt, temperature=0)
 
         return response.text
 
@@ -884,14 +942,7 @@ JOB DESCRIPTION:
 
     try:
 
-        response = client.models.generate_content(
-            model=CHAT_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0,
-                response_mime_type="application/json"
-            )
-        )
+        response = generate_gemini_content(prompt, temperature=0, response_mime_type="application/json")
 
         return json.loads(
             response.text
@@ -965,14 +1016,7 @@ Keep questions concise and realistic.
 """
 
     try:
-        response = client.models.generate_content(
-            model=CHAT_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.4,
-                response_mime_type="application/json"
-            )
-        )
+        response = generate_gemini_content(prompt, temperature=0.4, response_mime_type="application/json")
         data = json.loads(response.text)
         return data if "questions" in data else {
             "error": "AI returned an invalid question format."
@@ -1026,14 +1070,7 @@ Rules:
 """
 
     try:
-        response = client.models.generate_content(
-            model=CHAT_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.2,
-                response_mime_type="application/json"
-            )
-        )
+        response = generate_gemini_content(prompt, temperature=0.2, response_mime_type="application/json")
         return json.loads(response.text)
     except Exception as e:
         return {"error": str(e)}
@@ -1072,14 +1109,7 @@ Keep each list concise and actionable.
 """
 
     try:
-        response = client.models.generate_content(
-            model=CHAT_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.3,
-                response_mime_type="application/json"
-            )
-        )
+        response = generate_gemini_content(prompt, temperature=0.3, response_mime_type="application/json")
         return json.loads(response.text)
     except Exception as e:
         return {"error": str(e)}
